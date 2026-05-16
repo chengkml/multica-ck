@@ -129,8 +129,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// as "no cache, always hit DB".
 	patCache := auth.NewPATCache(rdb)
 	daemonTokenCache := auth.NewDaemonTokenCache(rdb)
+	miniprogramTokenCache := auth.NewMiniprogramTokenCache(rdb)
 	h.PATCache = patCache
 	h.DaemonTokenCache = daemonTokenCache
+	h.MiniprogramTokenCache = miniprogramTokenCache
 
 	// Empty-claim cache: lets the daemon poll path skip a Postgres
 	// scan when a recent check confirmed the runtime had no queued
@@ -209,6 +211,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.Post("/auth/send-code", h.SendCode)
 	r.Post("/auth/verify-code", h.VerifyCode)
 	r.Post("/auth/google", h.GoogleLogin)
+	r.Post("/auth/wx-bind", h.WxBind)
+	r.Post("/auth/wx-login", h.WxLogin)
 	r.Post("/auth/logout", h.Logout)
 
 	// Public API
@@ -319,6 +323,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Get("/", h.ListPersonalAccessTokens)
 			r.Post("/", h.CreatePersonalAccessToken)
 			r.Delete("/{id}", h.RevokePersonalAccessToken)
+		})
+
+		r.Route("/api/miniprogram-tokens", func(r chi.Router) {
+			r.Get("/", h.ListMiniprogramTokens)
+			r.Delete("/{id}", h.RevokeMiniprogramToken)
 		})
 
 		// --- Workspace-scoped routes (all require workspace membership) ---

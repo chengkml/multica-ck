@@ -1,0 +1,54 @@
+<navigation-bar title="登录" back="{{true}}" color="black" background="#FFF"></navigation-bar>
+<view class="page-body">
+  <view class="login-card">
+    <image class="logo" src="{{logoSrc}}" mode="aspectFit"></image>
+    <view class="title">Multica</view>
+    <view class="subtitle">使用邮箱验证码登录</view>
+
+    <view class="form">
+      <view class="form-item">
+        <text class="label">邮箱</text>
+        <input
+          class="input"
+          type="text"
+          placeholder="请输入邮箱地址"
+          value="{{email}}"
+          bindinput="onEmailInput"
+          disabled="{{loading}}"
+        />
+      </view>
+
+      <view class="form-item">
+        <text class="label">验证码</text>
+        <view class="code-row">
+          <input
+            class="input code-input"
+            type="text"
+            placeholder="请输入验证码"
+            value="{{code}}"
+            bindinput="onCodeInput"
+            disabled="{{loading}}"
+          />
+          <button
+            class="send-btn"
+            size="mini"
+            disabled="{{!canSendCode || sendingCode || loading}}"
+            bindtap="onSendCode"
+          >
+            {{sendCodeText}}
+          </button>
+        </view>
+      </view>
+
+      <button
+        class="submit-btn"
+        type="primary"
+        disabled="{{!canSubmit || loading}}"
+        loading="{{loading}}"
+        bindtap="onSubmit"
+      >
+        登录
+      </button>
+    </view>
+  </view>
+</view>

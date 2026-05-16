@@ -372,6 +372,18 @@ type Member struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type MiniprogramToken struct {
+	ID           pgtype.UUID        `json:"id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	OpenidHash   string             `json:"openid_hash"`
+	Appid        string             `json:"appid"`
+	UnionidHash  pgtype.Text        `json:"unionid_hash"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	LastUsedAt   pgtype.Timestamptz `json:"last_used_at"`
+	Revoked      bool               `json:"revoked"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type NotificationPreference struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`

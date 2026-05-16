@@ -1,0 +1,15 @@
+<navigation-bar title="Multica" back="{{false}}" color="black" background="#FFF"></navigation-bar>
+<scroll-view class="scrollarea" scroll-y type="list">
+  <view class="container">
+    <view class="user-card">
+      <image class="avatar" src="{{userInfo.avatar_url || defaultAvatarUrl}}" mode="cover"></image>
+      <view class="user-info">
+        <text class="user-name">{{userInfo.name || userInfo.email}}</text>
+        <text class="user-email">{{userInfo.email}}</text>
+      </view>
+    </view>
+    <view class="actions">
+      <button class="action-btn" bindtap="onLogout">退出登录</button>
+    </view>
+  </view>
+</scroll-view>

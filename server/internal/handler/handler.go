@@ -91,6 +91,8 @@ type Handler struct {
 	Analytics             analytics.Client
 	PATCache              *auth.PATCache
 	DaemonTokenCache      *auth.DaemonTokenCache
+	WxService             *service.WxService
+	MiniprogramTokenCache *auth.MiniprogramTokenCache
 	cfg                   Config
 }
 
@@ -130,6 +132,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Storage:               store,
 		CFSigner:              cfSigner,
 		Analytics:             analyticsClient,
+		WxService:             service.NewWxService(),
 		cfg:                   cfg,
 	}
 }

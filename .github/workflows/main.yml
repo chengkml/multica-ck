@@ -12,10 +12,10 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 env:
-  REGISTRY: ghcr.io
+  REGISTRY: ${{ vars.REGISTRY || 'registry.cn-hangzhou.aliyuncs.com' }}
+  REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE || 'multica' }}
 
 jobs:
   build-and-push:
@@ -32,20 +32,20 @@ jobs:
         id: vars
         shell: bash
         run: |
-          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "backend_image=${{ env.REGISTRY }}/${OWNER_LC}/multica-backend" >> "$GITHUB_OUTPUT"
-          echo "web_image=${{ env.REGISTRY }}/${OWNER_LC}/multica-web" >> "$GITHUB_OUTPUT"
-          echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          NS="${{ env.REGISTRY_NAMESPACE }}"
+          echo "backend_image=${{ env.REGISTRY }}/${NS}/multica-backend" >> "$GITHUB_OUTPUT"
+          echo "web_image=${{ env.REGISTRY }}/${NS}/multica-web" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: 安装 Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 登录 GHCR
+      - name: 登录镜像仓库
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: 构建并推送 Backend 镜像
         uses: docker/build-push-action@v6
@@ -55,10 +55,10 @@ jobs:
           pull: true
           push: true
           build-args: |
-            ALPINE_REPO=${{ vars.ALPINE_REPO || 'https://dl-cdn.alpinelinux.org/alpine' }}
-            ALPINE_REPO_FALLBACKS=${{ vars.ALPINE_REPO_FALLBACKS || 'https://mirrors.aliyun.com/alpine https://mirrors.tuna.tsinghua.edu.cn/alpine http://mirrors.aliyun.com/alpine http://mirrors.tuna.tsinghua.edu.cn/alpine' }}
-            GO_MODULE_PROXY=${{ vars.GO_MODULE_PROXY || 'https://proxy.golang.org,direct' }}
-            GO_MODULE_PROXY_FALLBACK=${{ vars.GO_MODULE_PROXY_FALLBACK || 'https://goproxy.cn,direct' }}
+            ALPINE_REPO=${{ vars.ALPINE_REPO || 'https://mirrors.aliyun.com/alpine' }}
+            ALPINE_REPO_FALLBACKS=${{ vars.ALPINE_REPO_FALLBACKS || 'https://mirrors.tuna.tsinghua.edu.cn/alpine http://mirrors.aliyun.com/alpine http://mirrors.tuna.tsinghua.edu.cn/alpine' }}
+            GO_MODULE_PROXY=${{ vars.GO_MODULE_PROXY || 'https://goproxy.cn,direct' }}
+            GO_MODULE_PROXY_FALLBACK=${{ vars.GO_MODULE_PROXY_FALLBACK || 'https://proxy.golang.org,direct' }}
             GO_MODULE_SUMDB=${{ vars.GO_MODULE_SUMDB || 'sum.golang.org' }}
           tags: |
             ${{ steps.vars.outputs.backend_image }}:${{ steps.vars.outputs.image_tag }}
@@ -94,14 +94,18 @@ jobs:
           SERVER_USER: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
           SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -euo pipefail
-          [ -n "${SERVER_HOST}" ] || { echo "::error::缺少 SERVER_HOST（请在 Secrets 或 Variables 中配置）"; exit 1; }
-          [ -n "${SERVER_USER}" ] || { echo "::error::缺少 SERVER_USER（请在 Secrets 或 Variables 中配置）"; exit 1; }
+          [ -n "${SERVER_HOST}" ] || { echo "::error::缺少 SERVER_HOST"; exit 1; }
+          [ -n "${SERVER_USER}" ] || { echo "::error::缺少 SERVER_USER"; exit 1; }
           if [ -z "${SERVER_SSH_KEY}" ] && [ -z "${SERVER_PASSWORD}" ]; then
             echo "::error::缺少登录凭据：请至少配置 SERVER_SSH_KEY 或 SERVER_PASSWORD"
             exit 1
           fi
+          [ -n "${REGISTRY_USERNAME}" ] || { echo "::error::缺少 REGISTRY_USERNAME"; exit 1; }
+          [ -n "${REGISTRY_PASSWORD}" ] || { echo "::error::缺少 REGISTRY_PASSWORD"; exit 1; }
 
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -145,8 +149,9 @@ jobs:
           BACKEND_IMAGE: ${{ needs.build-and-push.outputs.backend_image }}
           WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-          GHCR_USERNAME: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY: ${{ env.REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
@@ -155,7 +160,7 @@ jobs:
           command_timeout: 45m
           key: ${{ secrets.SERVER_SSH_KEY }}
           password: ${{ secrets.SERVER_PASSWORD }}
-          envs: DEPLOY_PATH,BACKEND_IMAGE,WEB_IMAGE,IMAGE_TAG,GHCR_USERNAME,GHCR_TOKEN
+          envs: DEPLOY_PATH,BACKEND_IMAGE,WEB_IMAGE,IMAGE_TAG,REGISTRY,REGISTRY_USERNAME,REGISTRY_PASSWORD
           script: |
             set -euo pipefail
 
@@ -171,7 +176,7 @@ jobs:
             MULTICA_IMAGE_TAG=${IMAGE_TAG}
             ENV
 
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+            echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY}" -u "${REGISTRY_USERNAME}" --password-stdin
 
             COMPOSE_CMD="docker compose"
             if ! docker compose version >/dev/null 2>&1; then

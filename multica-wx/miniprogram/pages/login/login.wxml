@@ -2,7 +2,7 @@
 <view class="page-body">
   <view class="login-card">
     <image class="logo" src="{{logoSrc}}" mode="aspectFit"></image>
-    <view class="title">Multica</view>
+    <view class="title">Quizck</view>
     <view class="subtitle">使用邮箱验证码登录</view>
 
     <view class="form">

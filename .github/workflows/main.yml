@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  REGISTRY: ${{ vars.REGISTRY || 'registry.cn-hangzhou.aliyuncs.com' }}
+  REGISTRY: ${{ vars.REGISTRY || 'crpi-u265r07n4blchcqo.cn-shanghai.personal.cr.aliyuncs.com' }}
   REGISTRY_NAMESPACE: ${{ vars.REGISTRY_NAMESPACE || 'multica' }}
 
 jobs:

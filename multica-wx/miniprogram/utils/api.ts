@@ -50,7 +50,8 @@ function request<T = unknown>(options: RequestOptions): Promise<ApiResponse<T>> 
           return
         }
         if (res.statusCode >= 400) {
-          const errMsg = (res.data as Record<string, string>)?.error || `request failed with status ${res.statusCode}`
+          const data = res.data as Record<string, string>
+          const errMsg = (data && data.error) || `request failed with status ${res.statusCode}`
           reject({ statusCode: res.statusCode, message: errMsg })
           return
         }

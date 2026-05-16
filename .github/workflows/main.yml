@@ -1,0 +1,213 @@
+name: Multica 镜像构建与部署
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: multica-build-and-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      backend_image: ${{ steps.vars.outputs.backend_image }}
+      web_image: ${{ steps.vars.outputs.web_image }}
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 生成镜像变量
+        id: vars
+        shell: bash
+        run: |
+          OWNER_LC="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "backend_image=${{ env.REGISTRY }}/${OWNER_LC}/multica-backend" >> "$GITHUB_OUTPUT"
+          echo "web_image=${{ env.REGISTRY }}/${OWNER_LC}/multica-web" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: 安装 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送 Backend 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          pull: true
+          push: true
+          build-args: |
+            ALPINE_REPO=${{ vars.ALPINE_REPO || 'https://dl-cdn.alpinelinux.org/alpine' }}
+            ALPINE_REPO_FALLBACKS=${{ vars.ALPINE_REPO_FALLBACKS || 'https://mirrors.aliyun.com/alpine https://mirrors.tuna.tsinghua.edu.cn/alpine http://mirrors.aliyun.com/alpine http://mirrors.tuna.tsinghua.edu.cn/alpine' }}
+            GO_MODULE_PROXY=${{ vars.GO_MODULE_PROXY || 'https://proxy.golang.org,direct' }}
+            GO_MODULE_PROXY_FALLBACK=${{ vars.GO_MODULE_PROXY_FALLBACK || 'https://goproxy.cn,direct' }}
+            GO_MODULE_SUMDB=${{ vars.GO_MODULE_SUMDB || 'sum.golang.org' }}
+          tags: |
+            ${{ steps.vars.outputs.backend_image }}:${{ steps.vars.outputs.image_tag }}
+            ${{ steps.vars.outputs.backend_image }}:latest
+          cache-from: type=gha,scope=multica-backend
+          cache-to: type=gha,mode=max,scope=multica-backend
+
+      - name: 构建并推送 Web 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          pull: true
+          push: true
+          build-args: |
+            REMOTE_API_URL=${{ vars.REMOTE_API_URL || 'http://backend:8080' }}
+            NEXT_PUBLIC_WS_URL=${{ vars.NEXT_PUBLIC_WS_URL || '' }}
+            NEXT_PUBLIC_APP_VERSION=${{ github.sha }}
+          tags: |
+            ${{ steps.vars.outputs.web_image }}:${{ steps.vars.outputs.image_tag }}
+            ${{ steps.vars.outputs.web_image }}:latest
+          cache-from: type=gha,scope=multica-web
+          cache-to: type=gha,mode=max,scope=multica-web
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: 校验部署参数
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "${SERVER_HOST}" ] || { echo "::error::缺少 SERVER_HOST（请在 Secrets 或 Variables 中配置）"; exit 1; }
+          [ -n "${SERVER_USER}" ] || { echo "::error::缺少 SERVER_USER（请在 Secrets 或 Variables 中配置）"; exit 1; }
+          if [ -z "${SERVER_SSH_KEY}" ] && [ -z "${SERVER_PASSWORD}" ]; then
+            echo "::error::缺少登录凭据：请至少配置 SERVER_SSH_KEY 或 SERVER_PASSWORD"
+            exit 1
+          fi
+
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 准备远端部署目录
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
+          port: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || 22 }}
+          timeout: 120s
+          command_timeout: 10m
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          envs: DEPLOY_PATH
+          script: |
+            set -euo pipefail
+            DEPLOY_DIR="${DEPLOY_PATH:-/opt/multica}"
+            mkdir -p "${DEPLOY_DIR}"
+
+      - name: 同步 compose 文件到服务器
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
+          port: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || 22 }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          timeout: 120s
+          command_timeout: 10m
+          source: "docker-compose.selfhost.yml"
+          target: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH || '/opt/multica' }}
+          overwrite: true
+
+      - name: 通过 SSH 拉取并更新容器
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH }}
+          BACKEND_IMAGE: ${{ needs.build-and-push.outputs.backend_image }}
+          WEB_IMAGE: ${{ needs.build-and-push.outputs.web_image }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          host: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
+          port: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || 22 }}
+          timeout: 120s
+          command_timeout: 45m
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          envs: DEPLOY_PATH,BACKEND_IMAGE,WEB_IMAGE,IMAGE_TAG,GHCR_USERNAME,GHCR_TOKEN
+          script: |
+            set -euo pipefail
+
+            DEPLOY_DIR="${DEPLOY_PATH:-/opt/multica}"
+            cd "${DEPLOY_DIR}"
+
+            [ -f docker-compose.selfhost.yml ] || { echo "[error] docker-compose.selfhost.yml 不存在"; exit 1; }
+            [ -f .env ] || { echo "[error] .env 不存在，请先在服务器配置部署环境变量"; exit 1; }
+
+            cat > .images.env <<ENV
+            MULTICA_BACKEND_IMAGE=${BACKEND_IMAGE}
+            MULTICA_WEB_IMAGE=${WEB_IMAGE}
+            MULTICA_IMAGE_TAG=${IMAGE_TAG}
+            ENV
+
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
+
+            COMPOSE_CMD="docker compose"
+            if ! docker compose version >/dev/null 2>&1; then
+              COMPOSE_CMD="docker-compose"
+            fi
+
+            compose_run() {
+              ${COMPOSE_CMD} --env-file .env --env-file .images.env -f docker-compose.selfhost.yml "$@"
+            }
+
+            pull_with_retry() {
+              local max_retries=3
+              local attempt=1
+              while true; do
+                if compose_run pull; then
+                  break
+                fi
+                if [ "${attempt}" -ge "${max_retries}" ]; then
+                  echo "[error] docker compose pull failed after ${max_retries} attempts."
+                  return 1
+                fi
+                local sleep_seconds=$((attempt * 20))
+                echo "[warn] docker compose pull failed (attempt ${attempt}/${max_retries}), retrying in ${sleep_seconds}s..."
+                sleep "${sleep_seconds}"
+                attempt=$((attempt + 1))
+              done
+            }
+
+            pull_with_retry
+            if ! compose_run up -d --remove-orphans; then
+              echo "[error] docker compose up failed, collecting diagnostics..."
+              compose_run ps || true
+              compose_run logs --no-color --tail 300 backend || true
+              compose_run logs --no-color --tail 300 frontend || true
+              compose_run logs --no-color --tail 200 postgres || true
+              exit 1
+            fi
+
+            compose_run ps

@@ -75,7 +75,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3033}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
     restart: unless-stopped

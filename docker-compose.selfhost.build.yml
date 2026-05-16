@@ -7,6 +7,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        ALPINE_REPO: ${ALPINE_REPO:-https://dl-cdn.alpinelinux.org/alpine}
+        ALPINE_REPO_FALLBACKS: ${ALPINE_REPO_FALLBACKS:-https://mirrors.aliyun.com/alpine https://mirrors.tuna.tsinghua.edu.cn/alpine http://mirrors.aliyun.com/alpine http://mirrors.tuna.tsinghua.edu.cn/alpine}
+        GO_MODULE_PROXY: ${GO_MODULE_PROXY:-https://proxy.golang.org,direct}
+        GO_MODULE_PROXY_FALLBACK: ${GO_MODULE_PROXY_FALLBACK:-https://goproxy.cn,direct}
+        GO_MODULE_SUMDB: ${GO_MODULE_SUMDB:-sum.golang.org}
 
   frontend:
     image: multica-web:dev

@@ -1,13 +1,38 @@
 # --- Build stage ---
 FROM golang:1.26-alpine AS builder
 
-RUN apk add --no-cache git
+ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine
+ARG ALPINE_REPO_FALLBACKS="https://mirrors.aliyun.com/alpine https://mirrors.tuna.tsinghua.edu.cn/alpine http://mirrors.aliyun.com/alpine http://mirrors.tuna.tsinghua.edu.cn/alpine"
+RUN set -eux; \
+    alpine_ver="$(cut -d. -f1,2 /etc/alpine-release)"; \
+    for repo in "${ALPINE_REPO}" ${ALPINE_REPO_FALLBACKS}; do \
+      printf '%s\n%s\n' \
+        "${repo}/v${alpine_ver}/main" \
+        "${repo}/v${alpine_ver}/community" > /etc/apk/repositories; \
+      if apk add --no-cache git; then \
+        echo "Installed git via ${repo}"; \
+        exit 0; \
+      fi; \
+      echo "apk add git failed via ${repo}, trying next mirror..."; \
+    done; \
+    echo "apk add git failed for all configured Alpine mirrors"; \
+    exit 1
 
 WORKDIR /src
 
+# Allow module proxy overrides for constrained networks. Default stays upstream.
+ARG GO_MODULE_PROXY=https://proxy.golang.org,direct
+ARG GO_MODULE_PROXY_FALLBACK=https://goproxy.cn,direct
+ARG GO_MODULE_SUMDB=sum.golang.org
+ENV GOPROXY=${GO_MODULE_PROXY}
+ENV GOSUMDB=${GO_MODULE_SUMDB}
+
 # Cache dependencies
 COPY server/go.mod server/go.sum ./server/
-RUN cd server && go mod download
+RUN cd server && \
+    go mod download || \
+    (echo "Primary GOPROXY failed, retrying with fallback GOPROXY=${GO_MODULE_PROXY_FALLBACK}" && \
+      GOPROXY="${GO_MODULE_PROXY_FALLBACK}" go mod download)
 
 # Copy server source
 COPY server/ ./server/
@@ -22,7 +47,22 @@ RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/migrate ./cmd/mi
 # --- Runtime stage ---
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata
+ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine
+ARG ALPINE_REPO_FALLBACKS="https://mirrors.aliyun.com/alpine https://mirrors.tuna.tsinghua.edu.cn/alpine http://mirrors.aliyun.com/alpine http://mirrors.tuna.tsinghua.edu.cn/alpine"
+RUN set -eux; \
+    alpine_ver="$(cut -d. -f1,2 /etc/alpine-release)"; \
+    for repo in "${ALPINE_REPO}" ${ALPINE_REPO_FALLBACKS}; do \
+      printf '%s\n%s\n' \
+        "${repo}/v${alpine_ver}/main" \
+        "${repo}/v${alpine_ver}/community" > /etc/apk/repositories; \
+      if apk add --no-cache ca-certificates tzdata; then \
+        echo "Installed runtime packages via ${repo}"; \
+        exit 0; \
+      fi; \
+      echo "apk add runtime packages failed via ${repo}, trying next mirror..."; \
+    done; \
+    echo "apk add runtime packages failed for all configured Alpine mirrors"; \
+    exit 1
 
 WORKDIR /app
 

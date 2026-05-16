@@ -7,6 +7,18 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Build-safe font variables: avoids next/font/google network fetch during docker build. */
+:root {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+               "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
+               sans-serif;
+  --font-serif: "Source Serif 4", "Iowan Old Style", "Apple Garamond",
+                Baskerville, "Times New Roman", serif;
+  --font-serif-zh: "Noto Serif SC", "Songti SC", "STSong", SimSun, serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+               monospace;
+}
+
 @source "../../../packages/ui/**/*.{ts,tsx}";
 @source "../../../packages/core/**/*.{ts,tsx}";
 @source "../../../packages/views/**/*.{ts,tsx}";

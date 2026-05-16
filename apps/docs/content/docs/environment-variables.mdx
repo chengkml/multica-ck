@@ -35,28 +35,23 @@ These are the core variables you must think about before deploying — some have
 
 ## Email configuration
 
-Multica supports two delivery backends — [Resend](https://resend.com/) for cloud deployments, or an SMTP relay for internal / on-premise networks. `SMTP_HOST` takes priority over `RESEND_API_KEY` when both are set.
+Multica can send verification codes and invite emails through either SMTP or [Resend](https://resend.com/).
 
-### Resend
-
-| Variable | Default | Description |
-|---|---|---|
-| `RESEND_API_KEY` | empty | Resend API key |
-| `RESEND_FROM_EMAIL` | `noreply@multica.ai` | Sender address (must be a domain verified in your Resend account; also reused as the `From:` header when SMTP is in use) |
-
-### SMTP relay
+Provider priority is: **SMTP (`SMTP_HOST`) > Resend (`RESEND_API_KEY`) > stdout fallback**.
 
 | Variable | Default | Description |
 |---|---|---|
-| `SMTP_HOST` | empty | SMTP relay hostname. Setting this activates SMTP mode and overrides Resend |
-| `SMTP_PORT` | `25` | SMTP port. Use `587` for STARTTLS submission; **port 465 (SMTPS / implicit TLS) is not supported** |
-| `SMTP_USERNAME` | empty | SMTP username. Leave empty for unauthenticated relay |
-| `SMTP_PASSWORD` | empty | SMTP password |
-| `SMTP_TLS_INSECURE` | `false` | Set `true` to skip TLS certificate verification (private CA / self-signed only) |
+| `SMTP_HOST` | empty | SMTP server hostname. When set, SMTP is enabled and takes priority |
+| `SMTP_PORT` | `587` | SMTP server port |
+| `SMTP_USERNAME` | empty | SMTP auth username (optional if relay allows anonymous send) |
+| `SMTP_PASSWORD` | empty | SMTP auth password |
+| `SMTP_TLS_MODE` | `auto` | TLS mode: `auto`, `starttls`, `ssl`, `none` |
+| `SMTP_FROM_EMAIL` | empty | Sender address for SMTP emails. Falls back to `RESEND_FROM_EMAIL`, then `noreply@multica.ai` |
+| `SMTP_INSECURE_SKIP_VERIFY` | `false` | Skip TLS cert verification (testing only) |
+| `RESEND_API_KEY` | empty | Resend API key (used only when SMTP is not configured) |
+| `RESEND_FROM_EMAIL` | `noreply@multica.ai` | Sender address for Resend (must be a domain verified in your Resend account) |
 
-STARTTLS is upgraded automatically when the server advertises it. The dial timeout is 10s and the whole SMTP session has a 30s deadline, so a black-holed relay can't hang the auth handler.
-
-**Behavior when neither is set**: the server does not error, but every email that should have been sent (verification codes, invite links) **is written to the server's stdout only**. Convenient for local development — copy the code out of the server logs; **in production, forgetting to set this creates a silent black hole**, with users never receiving email and no error surfaced.
+**Behavior when neither SMTP nor Resend is configured**: the server does not error, but every email that should have been sent (verification codes, invite links) **is written to the server's stdout only**. Convenient for local development — copy the code out of the server logs; **in production, forgetting to configure a provider creates a silent black hole**, with users never receiving email and no error surfaced.
 
 ## Google OAuth configuration
 

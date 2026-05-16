@@ -25,30 +25,22 @@ These have sensible defaults and only need to be set when tuning a large or cons
 
 ### Email (Required for Authentication)
 
-Multica supports two email backends. `SMTP_HOST` takes priority when set; otherwise `RESEND_API_KEY` is used. With neither configured, verification codes are printed to the server log — copy them from there to log in.
-
-#### Option A: Resend (recommended for cloud deployments)
+Multica uses email-based magic link authentication via SMTP or [Resend](https://resend.com).
+Provider priority is: `SMTP_HOST` (SMTP) > `RESEND_API_KEY` (Resend) > stdout fallback.
 
 | Variable | Description |
 |----------|-------------|
-| `RESEND_API_KEY` | Your Resend API key |
-| `RESEND_FROM_EMAIL` | Sender email address (default: `noreply@multica.ai`) |
+| `SMTP_HOST` | SMTP hostname (enables SMTP provider when set) |
+| `SMTP_PORT` | SMTP port (default: `587`) |
+| `SMTP_USERNAME` | SMTP auth username (optional for open relay/internal SMTP) |
+| `SMTP_PASSWORD` | SMTP auth password |
+| `SMTP_TLS_MODE` | SMTP TLS mode: `auto`, `starttls`, `ssl`, `none` |
+| `SMTP_FROM_EMAIL` | SMTP sender email address (falls back to `RESEND_FROM_EMAIL`) |
+| `SMTP_INSECURE_SKIP_VERIFY` | Skip TLS cert verification (testing only) |
+| `RESEND_API_KEY` | Resend API key (used when SMTP is not configured) |
+| `RESEND_FROM_EMAIL` | Resend sender email address (default: `noreply@multica.ai`) |
 
-#### Option B: SMTP relay (for self-hosted / on-premise deployments)
-
-Use this option when your deployment cannot reach the public internet or you already have an internal mail relay (e.g. Exchange, Postfix, SendGrid on-prem).
-
-| Variable | Description | Default |
-|----------|-------------|----------|
-| `SMTP_HOST` | SMTP relay hostname (setting this activates SMTP mode) | - |
-| `SMTP_PORT` | SMTP port | `25` |
-| `SMTP_USERNAME` | SMTP username (leave empty for unauthenticated relay) | - |
-| `SMTP_PASSWORD` | SMTP password | - |
-| `SMTP_TLS_INSECURE` | Set `true` to skip TLS certificate verification (self-signed / private CA certs) | `false` |
-
-STARTTLS is used automatically when advertised by the server. Port 465 (SMTPS / implicit TLS) is not currently supported - use ports 25 or 587 with STARTTLS.
-
-> **Note:** If neither Resend nor SMTP is configured, generated verification codes are printed to backend logs — copy them from there to log in. A fixed local testing code (e.g. `888888`) is **opt-in only**: set `MULTICA_DEV_VERIFICATION_CODE=888888` in `.env` and keep `APP_ENV` non-production. The Docker self-host stack pins `APP_ENV=production`, so the shortcut is ignored there. **Never enable a fixed code on a publicly reachable instance.**
+> **Note:** If Resend is not configured, generated verification codes are printed to backend logs. A fixed local testing code is disabled by default; to opt in on a private test instance, set `APP_ENV=development` and `MULTICA_DEV_VERIFICATION_CODE` to a 6-digit value. It is ignored when `APP_ENV=production`.
 
 ### Google OAuth (Optional)
 

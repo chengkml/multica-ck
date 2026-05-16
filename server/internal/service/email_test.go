@@ -37,10 +37,10 @@ func TestSanitizeSubjectField(t *testing.T) {
 
 func TestBuildInvitationParams_EscapesHTMLInBody(t *testing.T) {
 	tests := []struct {
-		name        string
-		inviter     string
-		workspace   string
-		wantInBody  []string
+		name          string
+		inviter       string
+		workspace     string
+		wantInBody    []string
 		wantNotInBody []string
 	}{
 		{
@@ -178,4 +178,118 @@ func TestBuildInvitationParams_ToAndFromPassedThrough(t *testing.T) {
 	if !strings.Contains(p.Html, "https://app.multica.ai/invite/abc") {
 		t.Errorf("body missing invite URL: %s", p.Html)
 	}
+}
+
+func TestParseSMTPTLSMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		port string
+		want string
+	}{
+		{name: "default uses starttls", mode: "", port: "", want: smtpTLSModeStartTLS},
+		{name: "default port 465 uses ssl", mode: "", port: "465", want: smtpTLSModeImplicit},
+		{name: "explicit starttls", mode: "starttls", port: "25", want: smtpTLSModeStartTLS},
+		{name: "explicit ssl alias", mode: "tls", port: "587", want: smtpTLSModeImplicit},
+		{name: "explicit none", mode: "none", port: "587", want: smtpTLSModeNone},
+		{name: "invalid mode falls back starttls", mode: "bad-mode", port: "587", want: smtpTLSModeStartTLS},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseSMTPTLSMode(tt.mode, tt.port); got != tt.want {
+				t.Fatalf("parseSMTPTLSMode(%q, %q) = %q, want %q", tt.mode, tt.port, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSMTPMessage(t *testing.T) {
+	msg, err := buildSMTPMessage(
+		"Sender <sender@example.com>",
+		[]string{"Alice <alice@example.com>", "bob@example.com"},
+		"邀请 Acme & Co.",
+		"<h1>Hello SMTP</h1>",
+	)
+	if err != nil {
+		t.Fatalf("buildSMTPMessage returned error: %v", err)
+	}
+
+	raw := string(msg)
+	mustContain := []string{
+		"From: Sender <sender@example.com>\r\n",
+		"To: Alice <alice@example.com>, bob@example.com\r\n",
+		"Subject: =?UTF-8?",
+		"MIME-Version: 1.0\r\n",
+		"Content-Type: text/html; charset=UTF-8\r\n",
+		"Content-Transfer-Encoding: quoted-printable\r\n",
+		"\r\n<h1>Hello SMTP</h1>",
+	}
+	for _, needle := range mustContain {
+		if !strings.Contains(raw, needle) {
+			t.Fatalf("message missing %q\nfull message:\n%s", needle, raw)
+		}
+	}
+}
+
+func TestBuildSMTPMessage_StripsHeaderInjection(t *testing.T) {
+	msg, err := buildSMTPMessage(
+		"sender@example.com\r\nBcc:evil@example.com",
+		[]string{"victim@example.com"},
+		"safe\r\nInjected: bad",
+		"ok",
+	)
+	if err != nil {
+		t.Fatalf("buildSMTPMessage returned error: %v", err)
+	}
+
+	raw := string(msg)
+	if strings.Contains(raw, "\r\nBcc:evil@example.com") {
+		t.Fatalf("raw message should not contain injected Bcc header: %s", raw)
+	}
+	if strings.Contains(raw, "\r\nInjected: bad") {
+		t.Fatalf("raw message should not contain injected header from subject: %s", raw)
+	}
+}
+
+func TestNewEmailServiceProviderSelection(t *testing.T) {
+	t.Run("uses smtp when smtp configured", func(t *testing.T) {
+		t.Setenv("SMTP_HOST", "smtp.example.com")
+		t.Setenv("SMTP_PORT", "587")
+		t.Setenv("SMTP_TLS_MODE", "starttls")
+		t.Setenv("RESEND_API_KEY", "re_should_be_ignored")
+
+		svc := NewEmailService()
+		if svc.smtpSender == nil {
+			t.Fatalf("expected smtp sender to be configured")
+		}
+		if svc.resendClient != nil {
+			t.Fatalf("expected resend client to be nil when SMTP is configured")
+		}
+	})
+
+	t.Run("uses resend when smtp missing", func(t *testing.T) {
+		t.Setenv("SMTP_HOST", "")
+		t.Setenv("RESEND_API_KEY", "re_configured")
+
+		svc := NewEmailService()
+		if svc.smtpSender != nil {
+			t.Fatalf("expected smtp sender to be nil")
+		}
+		if svc.resendClient == nil {
+			t.Fatalf("expected resend client to be configured")
+		}
+	})
+
+	t.Run("uses default from email", func(t *testing.T) {
+		t.Setenv("SMTP_HOST", "")
+		t.Setenv("SMTP_FROM_EMAIL", "")
+		t.Setenv("RESEND_FROM_EMAIL", "")
+		t.Setenv("RESEND_API_KEY", "")
+
+		svc := NewEmailService()
+		if svc.fromEmail != defaultFallbackSender {
+			t.Fatalf("fromEmail = %q, want %q", svc.fromEmail, defaultFallbackSender)
+		}
+	})
 }

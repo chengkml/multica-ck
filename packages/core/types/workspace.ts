@@ -2,6 +2,7 @@ export type MemberRole = "owner" | "admin" | "member";
 
 export interface WorkspaceRepo {
   url: string;
+  default_branch?: string;
 }
 
 export interface Workspace {

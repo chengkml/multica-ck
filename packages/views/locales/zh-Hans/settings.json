@@ -174,8 +174,13 @@
   "repositories": {
     "section_title": "代码仓库",
     "description": "与该工作区关联的 Git 仓库。智能体会从这里 clone 代码并完成工作。",
+    "url_label": "仓库 URL",
     "url_placeholder": "https://git.example.com/org/repo.git 或 git@git.example.com:org/repo.git",
     "url_empty": "（空 URL）",
+    "default_branch_label": "默认分支",
+    "default_branch_placeholder": "main（可选）",
+    "default_branch_prefix": "默认分支：",
+    "default_branch_empty": "（远端默认分支）",
     "description_placeholder": "描述（例如：Go 后端 + Next.js 前端）",
     "add": "添加仓库",
     "save": "保存",

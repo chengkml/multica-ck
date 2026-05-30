@@ -174,8 +174,13 @@
   "repositories": {
     "section_title": "Repositories",
     "description": "Git repositories associated with this workspace. Agents use these to clone and work on code.",
+    "url_label": "Repository URL",
     "url_placeholder": "https://git.example.com/org/repo.git or git@git.example.com:org/repo.git",
     "url_empty": "(empty URL)",
+    "default_branch_label": "Default branch",
+    "default_branch_placeholder": "main (optional)",
+    "default_branch_prefix": "Default branch:",
+    "default_branch_empty": "(remote default branch)",
     "description_placeholder": "Description (e.g. Go backend + Next.js frontend)",
     "add": "Add repository",
     "save": "Save",

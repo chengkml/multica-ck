@@ -13,6 +13,7 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -33,9 +34,11 @@ const (
 )
 
 type EmailService struct {
-	resendClient *resend.Client
-	smtpSender   *smtpSender
-	fromEmail    string
+	resendClient     *resend.Client
+	smtpSender       *smtpSender
+	fromEmail        string
+	smtpTLSImplicit  bool
+	smtpEHLOName     string
 }
 
 type smtpSender struct {
@@ -45,20 +48,22 @@ type smtpSender struct {
 	password           string
 	tlsMode            string
 	insecureSkipVerify bool
+	ehloName           string
 }
 
 func NewEmailService() *EmailService {
-	apiKey := os.Getenv("RESEND_API_KEY")
+	apiKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
 	smtpHost := strings.TrimSpace(os.Getenv("SMTP_HOST"))
 	smtpPort := strings.TrimSpace(os.Getenv("SMTP_PORT"))
-	smtpTLSMode := parseSMTPTLSMode(os.Getenv("SMTP_TLS_MODE"), smtpPort)
+	smtpTLSMode := parseSMTPTLSMode(firstNonEmpty(os.Getenv("SMTP_TLS_MODE"), os.Getenv("SMTP_TLS")), smtpPort)
 
 	resendFrom := strings.TrimSpace(os.Getenv("RESEND_FROM_EMAIL"))
 	smtpFrom := strings.TrimSpace(os.Getenv("SMTP_FROM_EMAIL"))
 	from := firstNonEmpty(smtpFrom, resendFrom, defaultFallbackSender)
 
 	svc := &EmailService{
-		fromEmail: from,
+		fromEmail:       from,
+		smtpTLSImplicit: smtpTLSMode == smtpTLSModeImplicit,
 	}
 
 	// Priority: SMTP > Resend > stdout fallback.
@@ -70,18 +75,21 @@ func NewEmailService() *EmailService {
 				smtpPort = defaultSMTPPortTLS
 			}
 		}
+		ehloName := resolveSMTPEHLOName()
+		svc.smtpEHLOName = ehloName
 		svc.smtpSender = &smtpSender{
 			host:               smtpHost,
 			port:               smtpPort,
 			username:           strings.TrimSpace(os.Getenv("SMTP_USERNAME")),
 			password:           os.Getenv("SMTP_PASSWORD"),
 			tlsMode:            smtpTLSMode,
-			insecureSkipVerify: parseBoolEnv(os.Getenv("SMTP_INSECURE_SKIP_VERIFY")),
+			insecureSkipVerify: parseBoolEnv(firstNonEmpty(os.Getenv("SMTP_INSECURE_SKIP_VERIFY"), os.Getenv("SMTP_TLS_INSECURE"))),
+			ehloName:           ehloName,
 		}
 		return svc
 	}
 
-	if strings.TrimSpace(apiKey) != "" {
+	if apiKey != "" {
 		svc.resendClient = resend.NewClient(apiKey)
 	}
 
@@ -104,6 +112,19 @@ func parseBoolEnv(raw string) bool {
 	default:
 		return false
 	}
+}
+
+func resolveSMTPEHLOName() string {
+	ehloName := strings.TrimSpace(os.Getenv("SMTP_EHLO_NAME"))
+	if ehloName != "" {
+		return ehloName
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		fmt.Printf("EmailService: os.Hostname() failed (%v); SMTP EHLO falls back to \"localhost\" — set SMTP_EHLO_NAME for strict relays\n", err)
+		return ""
+	}
+	return hostname
 }
 
 func parseSMTPTLSMode(rawMode, rawPort string) string {
@@ -191,25 +212,46 @@ func (s *smtpSender) newClient() (*smtp.Client, error) {
 
 	switch s.tlsMode {
 	case smtpTLSModeImplicit:
-		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		conn, err := tls.DialWithDialer(dialer, "tcp", addr, tlsConfig)
 		if err != nil {
 			return nil, fmt.Errorf("smtp tls dial %s: %w", addr, err)
 		}
+		if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("smtp set deadline: %w", err)
+		}
 		client, err := smtp.NewClient(conn, s.host)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("smtp create client: %w", err)
+		}
+		if s.ehloName != "" {
+			if err := client.Hello(s.ehloName); err != nil {
+				client.Close()
+				return nil, fmt.Errorf("smtp EHLO %s: %w", s.ehloName, err)
+			}
 		}
 		return client, nil
 	case smtpTLSModeStartTLS, smtpTLSModeNone:
-		conn, err := net.Dial("tcp", addr)
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 		if err != nil {
 			return nil, fmt.Errorf("smtp dial %s: %w", addr, err)
+		}
+		if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("smtp set deadline: %w", err)
 		}
 		client, err := smtp.NewClient(conn, s.host)
 		if err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("smtp create client: %w", err)
+		}
+		if s.ehloName != "" {
+			if err := client.Hello(s.ehloName); err != nil {
+				client.Close()
+				return nil, fmt.Errorf("smtp EHLO %s: %w", s.ehloName, err)
+			}
 		}
 
 		if s.tlsMode == smtpTLSModeStartTLS {

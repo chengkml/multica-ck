@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueMetadata, IssueMetadataValue, IssueReaction } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -18,6 +18,8 @@ export type {
   CreateAgentFromTemplateResponse,
   CreateAgentFromTemplateFailure,
   UpdateAgentRequest,
+  AgentEnvResponse,
+  UpdateAgentEnvRequest,
   Skill,
   SkillSummary,
   AgentSkillSummary,
@@ -36,6 +38,8 @@ export type {
   RuntimeUpdate,
   RuntimeUpdateStatus,
   RuntimeModel,
+  RuntimeModelThinking,
+  RuntimeModelThinkingLevel,
   RuntimeModelListRequest,
   RuntimeModelListStatus,
   RuntimeModelsResult,
@@ -61,7 +65,8 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
-export type { ChatSession, ChatMessage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse } from "./chat";
+export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
+export type { ChatSession, ChatMessage, ChatMessagesPage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse } from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
   Project,
@@ -72,27 +77,41 @@ export type {
   ListProjectsResponse,
   ProjectResource,
   ProjectResourceType,
+  ProjectResourceRef,
   GithubRepoResourceRef,
+  LocalDirectoryResourceRef,
   CreateProjectResourceRequest,
+  UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   GitHubInstallation,
+  GitHubMergeableState,
   GitHubPullRequest,
+  GitHubPullRequestChecksConclusion,
   GitHubPullRequestState,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
 } from "./github";
 export type {
+  LarkInstallation,
+  ListLarkInstallationsResponse,
+  BeginLarkInstallResponse,
+  LarkInstallStatusResponse,
+  RedeemLarkBindingTokenResponse,
+} from "./lark";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,
+  AutopilotAssigneeType,
   AutopilotTrigger,
   AutopilotTriggerKind,
   AutopilotRun,
   AutopilotRunStatus,
   AutopilotRunSource,
+  WebhookEventFilter,
   CreateAutopilotRequest,
   UpdateAutopilotRequest,
   CreateAutopilotTriggerRequest,
@@ -100,11 +119,16 @@ export type {
   ListAutopilotsResponse,
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
+  WebhookDelivery,
+  WebhookDeliveryStatus,
+  WebhookSignatureStatus,
+  ListWebhookDeliveriesResponse,
 } from "./autopilot";
 export type {
   Squad,
   SquadMember,
   SquadMemberType,
+  SquadMemberPreview,
   SquadActivityLog,
   SquadActivityOutcome,
   CreateSquadRequest,
@@ -113,4 +137,26 @@ export type {
   RemoveSquadMemberRequest,
   UpdateSquadMemberRoleRequest,
   CreateSquadActivityLogRequest,
+  SquadMemberStatusValue,
+  SquadActiveIssueBrief,
+  SquadMemberStatus,
+  SquadMemberStatusListResponse,
 } from "./squad";
+export type {
+  BillingBalance,
+  BillingTransaction,
+  BillingTransactionsPage,
+  BillingTxType,
+  BillingTxSource,
+  BillingBatch,
+  BillingBatchesPage,
+  BillingBatchSourceType,
+  BillingTopup,
+  BillingTopupsPage,
+  BillingTopupStatus,
+  BillingPriceTier,
+  CreateBillingCheckoutSessionRequest,
+  CreateBillingCheckoutSessionResponse,
+  BillingCheckoutSessionStatus,
+  CreateBillingPortalSessionResponse,
+} from "./billing";

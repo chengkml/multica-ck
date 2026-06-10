@@ -40,7 +40,62 @@ When both are configured, **SMTP takes priority**.
 
 3. Restart the server
 
-**What happens if neither SMTP nor Resend is configured**: the server doesn't error, but **every email that should have been sent is written to the server's stdout only**. Handy for local development (copy the code from the logs); in production it's a black hole.
+Use this when the deployment can't reach `api.resend.com` or you already have an internal mail relay (Microsoft Exchange, Postfix, on-prem SendGrid, etc.). `SMTP_HOST` takes priority over `RESEND_API_KEY` when both are set, so verification and invite mail can stay inside the internal network.
+
+The SMTP path supports the three relay modes most on-premise mail servers expose:
+
+| Mode | Port | Auth | TLS |
+|---|---|---|---|
+| Anonymous internal relay | `25` | none — submission is trusted by IP / subnet | `SMTP_TLS_MODE=none` for internal plaintext |
+| Authenticated submission | `587` | `SMTP_USERNAME` + `SMTP_PASSWORD` | `SMTP_TLS_MODE=starttls` |
+| Implicit TLS (SMTPS) | `465` | optional (`SMTP_USERNAME` + `SMTP_PASSWORD`) | TLS handshake on connect — auto-enabled on port `465`, or force with `SMTP_TLS_MODE=ssl` / `SMTP_TLS=implicit` |
+
+**Anonymous Exchange relay on port 25** — the typical internal SMTP relay / Exchange anonymous receive connector that accepts mail from a trusted subnet without credentials:
+
+```bash
+SMTP_HOST=exchange.internal.example.com
+SMTP_PORT=25
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_TLS_MODE=none
+SMTP_FROM_EMAIL=noreply@yourdomain.com
+```
+
+**Authenticated submission on port 587** — for relays that require a service account; STARTTLS is required when `SMTP_TLS_MODE=starttls`:
+
+```bash
+SMTP_HOST=smtp.internal.example.com
+SMTP_PORT=587
+SMTP_USERNAME=multica
+SMTP_PASSWORD=...
+SMTP_TLS_MODE=starttls
+SMTP_INSECURE_SKIP_VERIFY=false        # set true only for self-signed / private CA
+SMTP_FROM_EMAIL=noreply@yourdomain.com
+```
+
+**Implicit TLS (SMTPS) on port 465** — for providers that only offer SMTPS and don't advertise STARTTLS (e.g. Aliyun / Tencent enterprise mail). Port `465` auto-enables implicit TLS; `SMTP_TLS_MODE=ssl` or `SMTP_TLS=implicit` forces it on a non-standard SMTPS port:
+
+```bash
+SMTP_HOST=smtp.qiye.aliyun.com
+SMTP_PORT=465                  # implicit TLS auto-enabled on 465
+SMTP_USERNAME=multica@yourdomain.com
+SMTP_PASSWORD=...
+SMTP_TLS_MODE=ssl              # optional on 465; required on a non-standard SMTPS port
+SMTP_FROM_EMAIL=noreply@yourdomain.com
+```
+
+**Strict public relays (e.g. Google Workspace `smtp-relay.gmail.com`)** additionally require a valid EHLO name. Set `SMTP_EHLO_NAME` to the FQDN the relay expects; it defaults to the machine hostname, which inside a container is usually not a valid FQDN:
+
+```bash
+SMTP_HOST=smtp-relay.gmail.com
+SMTP_PORT=587
+SMTP_EHLO_NAME=mail.yourdomain.com   # FQDN the relay accepts; defaults to the container hostname
+SMTP_FROM_EMAIL=noreply@yourdomain.com
+```
+
+`SMTP_TLS_MODE` and `SMTP_INSECURE_SKIP_VERIFY` are the preferred multica-ck names. `SMTP_TLS` and `SMTP_TLS_INSECURE` are accepted as upstream-compatible aliases. The dial timeout is 10s and the whole SMTP session has a 30s deadline, so a black-holed relay can't hang the auth handler.
+
+**What happens if you set neither**: the server doesn't error, but **every email that should have been sent is written to the server's stdout only**. Handy for local development (copy the code from the logs); in production it's a black hole.
 
 ## Fixed local testing codes
 

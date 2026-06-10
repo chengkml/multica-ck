@@ -13,6 +13,9 @@ services:
         GO_MODULE_PROXY: ${GO_MODULE_PROXY:-https://proxy.golang.org,direct}
         GO_MODULE_PROXY_FALLBACK: ${GO_MODULE_PROXY_FALLBACK:-https://goproxy.cn,direct}
         GO_MODULE_SUMDB: ${GO_MODULE_SUMDB:-sum.golang.org}
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        DATE: ${DATE:-unknown}
 
   frontend:
     image: multica-web:dev

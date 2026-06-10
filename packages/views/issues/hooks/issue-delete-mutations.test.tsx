@@ -40,6 +40,7 @@ const workspace: Workspace = {
   settings: {},
   repos: [],
   issue_prefix: "TST",
+  avatar_url: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
@@ -60,7 +61,9 @@ const baseIssue: Issue = {
   parent_issue_id: PARENT_ISSUE_ID,
   project_id: null,
   position: 0,
+  start_date: null,
   due_date: null,
+  metadata: {},
   labels: [],
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",

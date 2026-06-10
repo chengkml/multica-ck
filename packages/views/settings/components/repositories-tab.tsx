@@ -32,7 +32,8 @@ function isDirty(local: WorkspaceRepo[], saved: WorkspaceRepo[]): boolean {
   if (local.length !== saved.length) return true;
   return local.some((r, i) => {
     if (r.url !== saved[i]?.url) return true;
-    return normalizeDefaultBranch(r.default_branch) !== normalizeDefaultBranch(saved[i]?.default_branch);
+    if (normalizeDefaultBranch(r.default_branch) !== normalizeDefaultBranch(saved[i]?.default_branch)) return true;
+    return (r.description ?? "") !== (saved[i]?.description ?? "");
   });
 }
 
@@ -77,7 +78,7 @@ export function RepositoriesTab() {
 
   const handleAddRepo = () => {
     const nextIndex = repos.length;
-    setRepos([...repos, { url: "", default_branch: "" }]);
+    setRepos([...repos, { url: "", default_branch: "", description: "" }]);
     setEditingIndices(new Set(editingIndices).add(nextIndex));
   };
 
@@ -86,12 +87,8 @@ export function RepositoriesTab() {
     setEditingIndices(dropAndShiftIndex(editingIndices, index));
   };
 
-  const handleRepoChange = (index: number, value: string) => {
-    setRepos(repos.map((r, i) => (i === index ? { ...r, url: value } : r)));
-  };
-
-  const handleDefaultBranchChange = (index: number, value: string) => {
-    setRepos(repos.map((r, i) => (i === index ? { ...r, default_branch: value } : r)));
+  const handleRepoChange = (index: number, field: keyof WorkspaceRepo, value: string) => {
+    setRepos(repos.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
   };
 
   const handleEditRepo = (index: number) => {
@@ -99,8 +96,8 @@ export function RepositoriesTab() {
   };
 
   const handleCancelEdit = (index: number) => {
-    const savedRepo = savedRepos[index];
-    if (!savedRepo) {
+    const saved = savedRepos[index];
+    if (saved === undefined) {
       // Newly added row that was never persisted — drop it entirely.
       handleRemoveRepo(index);
       return;
@@ -110,8 +107,9 @@ export function RepositoriesTab() {
         i === index
           ? {
               ...r,
-              url: savedRepo.url,
-              default_branch: savedRepo.default_branch ?? "",
+              url: saved.url,
+              default_branch: saved.default_branch ?? "",
+              description: saved.description ?? "",
             }
           : r,
       ),
@@ -148,11 +146,11 @@ export function RepositoriesTab() {
                   className="group flex items-start gap-2"
                 >
                   {isEditing ? (
-                    <div className="flex-1 min-w-0 space-y-2">
+                    <div className="flex-1 min-w-0 space-y-1.5">
                       <Input
                         type="text"
                         value={repo.url}
-                        onChange={(e) => handleRepoChange(index, e.target.value)}
+                        onChange={(e) => handleRepoChange(index, "url", e.target.value)}
                         disabled={!canManageWorkspace}
                         placeholder={t(($) => $.repositories.url_placeholder)}
                         aria-label={t(($) => $.repositories.url_label)}
@@ -161,21 +159,34 @@ export function RepositoriesTab() {
                       <Input
                         type="text"
                         value={repo.default_branch ?? ""}
-                        onChange={(e) => handleDefaultBranchChange(index, e.target.value)}
+                        onChange={(e) => handleRepoChange(index, "default_branch", e.target.value)}
                         disabled={!canManageWorkspace}
                         placeholder={t(($) => $.repositories.default_branch_placeholder)}
                         aria-label={t(($) => $.repositories.default_branch_label)}
                         className="text-sm"
                       />
+                      <Input
+                        type="text"
+                        value={repo.description ?? ""}
+                        onChange={(e) => handleRepoChange(index, "description", e.target.value)}
+                        disabled={!canManageWorkspace}
+                        placeholder={t(($) => $.repositories.description_placeholder)}
+                        className="text-sm"
+                      />
                     </div>
                   ) : (
-                    <div
-                      className="flex-1 min-w-0 rounded-md border bg-muted/50 px-3 py-2"
-                      title={repo.url}
-                    >
-                      <p className="truncate font-mono text-xs text-muted-foreground">
+                    <div className="flex-1 min-w-0 rounded-md border bg-muted/50 px-3 py-2">
+                      <div
+                        className="truncate font-mono text-xs text-muted-foreground"
+                        title={repo.url}
+                      >
                         {repo.url || t(($) => $.repositories.url_empty)}
-                      </p>
+                      </div>
+                      {repo.description && (
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground/70" title={repo.description}>
+                          {repo.description}
+                        </div>
+                      )}
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         {t(($) => $.repositories.default_branch_prefix)}{" "}
                         <span className="font-mono">
@@ -189,8 +200,8 @@ export function RepositoriesTab() {
                     <div
                       className={
                         isEditing
-                          ? "flex shrink-0 items-center gap-0.5"
-                          : "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+                          ? "flex shrink-0 items-center gap-0.5 pt-1.5"
+                          : "flex shrink-0 items-center gap-0.5 pt-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
                       }
                     >
                       {!isEditing && (

@@ -127,8 +127,10 @@ jobs:
             set -euo pipefail
             DEPLOY_DIR="${DEPLOY_PATH:-/opt/multica}"
             mkdir -p "${DEPLOY_DIR}"
+            mkdir -p "${DEPLOY_DIR}/data/postgres"
+            mkdir -p "${DEPLOY_DIR}/data/uploads"
 
-      - name: 同步 compose 文件到服务器
+      - name: 同步 compose + deploy 配置
         uses: appleboy/scp-action@v1.0.0
         with:
           host: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
@@ -137,9 +139,21 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           password: ${{ secrets.SERVER_PASSWORD }}
           timeout: 120s
-          command_timeout: 10m
           source: "docker-compose.selfhost.yml"
           target: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH || '/opt/multica' }}
+          overwrite: true
+
+      - name: 通过 SCP 同步部署配置
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST || vars.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || vars.SERVER_USER }}
+          port: ${{ secrets.SERVER_PORT || vars.SERVER_PORT || 22 }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          timeout: 120s
+          source: "deploy/multica/"
+          target: ${{ secrets.DEPLOY_PATH || vars.DEPLOY_PATH || '/opt/multica' }}/deploy/
           overwrite: true
 
       - name: 通过 SSH 拉取并更新容器
@@ -168,9 +182,20 @@ jobs:
             cd "${DEPLOY_DIR}"
 
             [ -f docker-compose.selfhost.yml ] || { echo "[error] docker-compose.selfhost.yml 不存在"; exit 1; }
-            [ -f .env ] || { echo "[error] .env 不存在，请先在服务器配置部署环境变量"; exit 1; }
 
-            cat > .images.env <<ENV
+            # 首次部署自动初始化 .env
+            if [ ! -f .env ]; then
+              if [ -f deploy/.env.prod.example ]; then
+                cp deploy/.env.prod.example .env
+                echo "[info] 已从 deploy/.env.prod.example 初始化 .env"
+                echo "[warn] 请手动编辑 .env 中的 JWT_SECRET 和 SMTP 密码，然后重新运行部署"
+              else
+                echo "[error] .env 不存在且无模板可用"
+                exit 1
+              fi
+            fi
+
+            cat > .images.env <<'ENV'
             MULTICA_BACKEND_IMAGE=${BACKEND_IMAGE}
             MULTICA_WEB_IMAGE=${WEB_IMAGE}
             MULTICA_IMAGE_TAG=${IMAGE_TAG}

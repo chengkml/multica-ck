@@ -63,6 +63,8 @@ jobs:
           tags: |
             ${{ steps.vars.outputs.backend_image }}:${{ steps.vars.outputs.image_tag }}
             ${{ steps.vars.outputs.backend_image }}:latest
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=multica-backend
           cache-to: type=gha,mode=max,scope=multica-backend
 
@@ -80,6 +82,8 @@ jobs:
           tags: |
             ${{ steps.vars.outputs.web_image }}:${{ steps.vars.outputs.image_tag }}
             ${{ steps.vars.outputs.web_image }}:latest
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=multica-web
           cache-to: type=gha,mode=max,scope=multica-web
 

@@ -4,17 +4,20 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/gorilla/websocket"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // fakeWSConn is a programmable WSConn driven by tests. ReadMessage
@@ -107,24 +110,50 @@ func (d *fakeWSDialer) DialContext(ctx context.Context, urlStr string, h http.He
 	return d.conn, nil, nil
 }
 
+// syncBuffer is a mutex-guarded io.Writer, so a slog handler written
+// from the connector goroutine can be read from the test goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // quietConnector wires a connector with a deterministic decoder + the
 // fakeWSConn. Caller controls the decoder so each test can assert
 // per-payload behaviour.
 func quietConnector(t *testing.T, conn *fakeWSConn, decoder FrameDecoder, pingInterval time.Duration) *WSLongConnConnector {
 	t.Helper()
+	return connectorWithLogger(t, conn, decoder, pingInterval, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// connectorWithLogger is quietConnector with the logger left to the
+// caller, for the tests that assert on what the connector logs.
+func connectorWithLogger(t *testing.T, conn *fakeWSConn, decoder FrameDecoder, pingInterval time.Duration, logger *slog.Logger) *WSLongConnConnector {
+	t.Helper()
 	c, err := NewWSLongConnConnector(WSConnectorConfig{
-		Dialer:          &fakeWSDialer{conn: conn},
+		Dialer: &fakeWSDialer{conn: conn},
 		EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) {
 			return WSEndpoint{URL: "wss://test/ignored", ServiceID: 7, PingInterval: pingInterval}, nil
 		}),
-		FrameDecoder:    decoder,
-		CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) {
+		FrameDecoder: decoder,
+		CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
 			return InstallationCredentials{AppID: "test_app", AppSecret: "secret"}, nil
 		}),
 		PingInterval: pingInterval,
 		ReadDeadline: time.Second,
 		WriteTimeout: time.Second,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       logger,
 	})
 	if err != nil {
 		t.Fatalf("NewWSLongConnConnector: %v", err)
@@ -150,7 +179,7 @@ func pushDataFrame(conn *fakeWSConn, payload []byte, messageID string) {
 func TestWSConnectorRunReturnsOnCtxCancelEvenWhenReadIsBlocked(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
 		return InboundMessage{}, false, nil
 	})
 	c := quietConnector(t, conn, decoder, 10*time.Millisecond)
@@ -158,7 +187,7 @@ func TestWSConnectorRunReturnsOnCtxCancelEvenWhenReadIsBlocked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
 			t.Errorf("emit unexpectedly called")
 			return DispatchResult{}, nil
 		})
@@ -187,7 +216,7 @@ func TestWSConnectorRunReturnsOnCtxCancelEvenWhenReadIsBlocked(t *testing.T) {
 func TestWSConnectorEmitsDecodedFramesAndAcks(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func(payload []byte, _ db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func(payload []byte, _ Installation) (InboundMessage, bool, error) {
 		if string(payload) == "heartbeat" {
 			return InboundMessage{}, false, nil
 		}
@@ -213,7 +242,7 @@ func TestWSConnectorEmitsDecodedFramesAndAcks(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, emit)
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, emit)
 	}()
 
 	pushDataFrame(conn, []byte("evt-1"), "m1")
@@ -272,7 +301,7 @@ func TestWSConnectorEmitsDecodedFramesAndAcks(t *testing.T) {
 func TestWSConnectorRespondsToServerPingWithPong(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
 		return InboundMessage{}, false, nil
 	})
 	c := quietConnector(t, conn, decoder, time.Hour)
@@ -282,7 +311,7 @@ func TestWSConnectorRespondsToServerPingWithPong(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
 			return DispatchResult{}, nil
 		})
 	}()
@@ -326,7 +355,7 @@ func TestWSConnectorRespondsToServerPingWithPong(t *testing.T) {
 func TestWSConnectorEmitInfraErrorSendsNackAndReturns(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
 		return InboundMessage{EventID: "x"}, true, nil
 	})
 	c := quietConnector(t, conn, decoder, time.Hour)
@@ -337,7 +366,7 @@ func TestWSConnectorEmitInfraErrorSendsNackAndReturns(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
 			return DispatchResult{}, infra
 		})
 	}()
@@ -374,7 +403,7 @@ func TestWSConnectorEmitInfraErrorSendsNackAndReturns(t *testing.T) {
 func TestWSConnectorSendsAppLayerPings(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
 		return InboundMessage{}, false, nil
 	})
 	c := quietConnector(t, conn, decoder, 10*time.Millisecond)
@@ -384,7 +413,7 @@ func TestWSConnectorSendsAppLayerPings(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
 			return DispatchResult{}, nil
 		})
 	}()
@@ -420,7 +449,7 @@ func TestWSConnectorDecoderErrorAcksAndContinues(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
 	decodeCount := int32(0)
-	decoder := FrameDecoderFunc(func(payload []byte, _ db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func(payload []byte, _ Installation) (InboundMessage, bool, error) {
 		n := atomic.AddInt32(&decodeCount, 1)
 		if n == 1 {
 			return InboundMessage{}, false, errors.New("synthetic decode failure")
@@ -439,7 +468,7 @@ func TestWSConnectorDecoderErrorAcksAndContinues(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, emit)
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, emit)
 	}()
 
 	pushDataFrame(conn, []byte("bad"), "mb")
@@ -458,10 +487,75 @@ func TestWSConnectorDecoderErrorAcksAndContinues(t *testing.T) {
 	<-done
 }
 
+// TestWSConnectorLogsDroppedEventTypeOncePerType covers #8496: an app can
+// subscribe to event types we do not handle, and that path writes neither a
+// log line nor a DB row, so the socket leaves no trace of what it receives.
+// The type is named once per connection — a busy chat delivers reactions and
+// membership churn continuously, and one line per frame would be unbounded.
+// Heartbeats carry no event type and stay silent.
+func TestWSConnectorLogsDroppedEventTypeOncePerType(t *testing.T) {
+	t.Parallel()
+	conn := newFakeWSConn()
+	logs := &syncBuffer{}
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
+		return InboundMessage{}, false, nil
+	})
+	c := connectorWithLogger(t, conn, decoder, time.Hour, slog.New(slog.NewTextHandler(logs, nil)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+			return DispatchResult{}, nil
+		})
+	}()
+
+	reaction := `{"schema":"2.0","header":{"event_type":"im.message.reaction.created_v1","event_id":"e%d"}}`
+	pushDataFrame(conn, []byte(fmt.Sprintf(reaction, 1)), "m1")
+	waitForWrites(t, conn, 1)
+	if got := logs.String(); !strings.Contains(got, "im.message.reaction.created_v1") {
+		t.Fatalf("dropped event type not logged; log was:\n%s", got)
+	}
+
+	// Same type again, plus a heartbeat: both ACKed, neither logged.
+	pushDataFrame(conn, []byte(fmt.Sprintf(reaction, 2)), "m2")
+	pushDataFrame(conn, []byte(`{}`), "m3")
+	waitForWrites(t, conn, 3)
+	if got := strings.Count(logs.String(), "dropping unhandled event type"); got != 1 {
+		t.Errorf("log lines after a repeat + a heartbeat = %d, want 1; log was:\n%s", got, logs.String())
+	}
+
+	// A type we have not reported yet is worth one line of its own.
+	pushDataFrame(conn, []byte(`{"schema":"2.0","header":{"event_type":"im.chat.access_event_v1","event_id":"e4"}}`), "m4")
+	waitForWrites(t, conn, 4)
+	if got := strings.Count(logs.String(), "dropping unhandled event type"); got != 2 {
+		t.Errorf("log lines after a second event type = %d, want 2; log was:\n%s", got, logs.String())
+	}
+
+	cancel()
+	<-done
+}
+
+// waitForWrites blocks until the connector has written n frames (each
+// processed frame is ACKed), so a test can assert on what handling that
+// frame did without racing the connector goroutine.
+func waitForWrites(t *testing.T, conn *fakeWSConn, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(conn.snapshot()) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("connector wrote %d frames, want %d", len(conn.snapshot()), n)
+}
+
 func TestWSConnectorReadErrorReturnsToHub(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) {
 		return InboundMessage{}, false, nil
 	})
 	c := quietConnector(t, conn, decoder, time.Hour)
@@ -469,7 +563,7 @@ func TestWSConnectorReadErrorReturnsToHub(t *testing.T) {
 	ctx := context.Background()
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, func(context.Context, InboundMessage) (DispatchResult, error) {
 			return DispatchResult{}, nil
 		})
 	}()
@@ -496,24 +590,30 @@ func TestWSConnectorRequiresAllDeps(t *testing.T) {
 		cfg  WSConnectorConfig
 	}{
 		{"no dialer", WSConnectorConfig{
-			EndpointFetcher:     EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{}, nil }),
-			FrameDecoder:        FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
-			CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) { return InstallationCredentials{}, nil }),
+			EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{}, nil }),
+			FrameDecoder:    FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
+			CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
+				return InstallationCredentials{}, nil
+			}),
 		}},
 		{"no endpoint fetcher", WSConnectorConfig{
-			Dialer:              &fakeWSDialer{},
-			FrameDecoder:        FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
-			CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) { return InstallationCredentials{}, nil }),
+			Dialer:       &fakeWSDialer{},
+			FrameDecoder: FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
+			CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
+				return InstallationCredentials{}, nil
+			}),
 		}},
 		{"no decoder", WSConnectorConfig{
-			Dialer:              &fakeWSDialer{},
-			EndpointFetcher:     EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{}, nil }),
-			CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) { return InstallationCredentials{}, nil }),
+			Dialer:          &fakeWSDialer{},
+			EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{}, nil }),
+			CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
+				return InstallationCredentials{}, nil
+			}),
 		}},
 		{"no credentials provider", WSConnectorConfig{
 			Dialer:          &fakeWSDialer{},
 			EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{}, nil }),
-			FrameDecoder:    FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
+			FrameDecoder:    FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
 		}},
 	}
 	for _, tc := range cases {
@@ -531,10 +631,12 @@ func TestWSConnectorDialErrorIsReturned(t *testing.T) {
 	t.Parallel()
 	dialErr := errors.New("dial blew up")
 	c, err := NewWSLongConnConnector(WSConnectorConfig{
-		Dialer:          &fakeWSDialer{dialErr: dialErr},
-		EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{URL: "wss://x", ServiceID: 1}, nil }),
-		FrameDecoder:    FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
-		CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) {
+		Dialer: &fakeWSDialer{dialErr: dialErr},
+		EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) {
+			return WSEndpoint{URL: "wss://x", ServiceID: 1}, nil
+		}),
+		FrameDecoder: FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
+		CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
 			return InstallationCredentials{AppID: "a"}, nil
 		}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -542,7 +644,7 @@ func TestWSConnectorDialErrorIsReturned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
-	err = c.Run(context.Background(), db.LarkInstallation{}, func(context.Context, InboundMessage) (DispatchResult, error) {
+	err = c.Run(context.Background(), Installation{}, func(context.Context, InboundMessage) (DispatchResult, error) {
 		return DispatchResult{}, nil
 	})
 	if err == nil || !errors.Is(err, dialErr) {
@@ -583,7 +685,7 @@ func TestWSConnectorReassemblesChunkedDataFrame(t *testing.T) {
 	conn := newFakeWSConn()
 	var decodedPayloads [][]byte
 	var decodeMu sync.Mutex
-	decoder := FrameDecoderFunc(func(payload []byte, _ db.LarkInstallation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func(payload []byte, _ Installation) (InboundMessage, bool, error) {
 		decodeMu.Lock()
 		decodedPayloads = append(decodedPayloads, append([]byte(nil), payload...))
 		decodeMu.Unlock()
@@ -601,7 +703,7 @@ func TestWSConnectorReassemblesChunkedDataFrame(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, emit)
+		done <- c.Run(ctx, Installation{AppID: "test_app"}, emit)
 	}()
 
 	// Three chunks of a single logical event "ABC".
@@ -651,14 +753,80 @@ func TestWSConnectorReassemblesChunkedDataFrame(t *testing.T) {
 	}
 }
 
+func TestGorillaDialerPreservesConfiguredDialerProxy(t *testing.T) {
+	t.Parallel()
+
+	proxyErr := errors.New("configured proxy refused")
+	d := &GorillaDialer{
+		Dialer: &websocket.Dialer{
+			Proxy: func(*http.Request) (*url.URL, error) {
+				return nil, proxyErr
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _, err := d.DialContext(ctx, "ws://127.0.0.1:1", nil)
+	if !errors.Is(err, proxyErr) {
+		t.Fatalf("DialContext error = %v, want %v", err, proxyErr)
+	}
+}
+
+func TestGorillaDialerProxyOverridesConfiguredDialerProxy(t *testing.T) {
+	t.Parallel()
+
+	configuredProxyErr := errors.New("configured proxy refused")
+	overrideProxyErr := errors.New("override proxy refused")
+	d := &GorillaDialer{
+		Dialer: &websocket.Dialer{
+			Proxy: func(*http.Request) (*url.URL, error) {
+				return nil, configuredProxyErr
+			},
+		},
+		Proxy: func(*http.Request) (*url.URL, error) {
+			return nil, overrideProxyErr
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _, err := d.DialContext(ctx, "ws://127.0.0.1:1", nil)
+	if !errors.Is(err, overrideProxyErr) {
+		t.Fatalf("DialContext error = %v, want %v", err, overrideProxyErr)
+	}
+	if errors.Is(err, configuredProxyErr) {
+		t.Fatalf("DialContext used configured proxy error %v instead of override", configuredProxyErr)
+	}
+}
+
+func TestGorillaDialerProxyForwardsError(t *testing.T) {
+	t.Parallel()
+
+	d := NewGorillaDialer()
+	proxyErr := errors.New("proxy refused")
+	d.Proxy = func(r *http.Request) (*url.URL, error) {
+		return nil, proxyErr
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _, err := d.DialContext(ctx, "ws://127.0.0.1:1", nil)
+	if !errors.Is(err, proxyErr) {
+		t.Fatalf("DialContext error = %v, want %v", err, proxyErr)
+	}
+}
+
 func TestWSConnectorCredentialsErrorIsReturned(t *testing.T) {
 	t.Parallel()
 	credsErr := errors.New("decrypt failed")
 	c, err := NewWSLongConnConnector(WSConnectorConfig{
-		Dialer:          &fakeWSDialer{conn: newFakeWSConn()},
-		EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) { return WSEndpoint{URL: "wss://x"}, nil }),
-		FrameDecoder:    FrameDecoderFunc(func([]byte, db.LarkInstallation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
-		CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) {
+		Dialer: &fakeWSDialer{conn: newFakeWSConn()},
+		EndpointFetcher: EndpointFetcherFunc(func(context.Context, InstallationCredentials) (WSEndpoint, error) {
+			return WSEndpoint{URL: "wss://x"}, nil
+		}),
+		FrameDecoder: FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }),
+		CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
 			return InstallationCredentials{}, credsErr
 		}),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -666,10 +834,193 @@ func TestWSConnectorCredentialsErrorIsReturned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
-	err = c.Run(context.Background(), db.LarkInstallation{}, func(context.Context, InboundMessage) (DispatchResult, error) {
+	err = c.Run(context.Background(), Installation{}, func(context.Context, InboundMessage) (DispatchResult, error) {
 		return DispatchResult{}, nil
 	})
 	if err == nil || !errors.Is(err, credsErr) {
 		t.Fatalf("expected wrapped credentials error, got %v", err)
+	}
+}
+
+func TestGorillaDialerInvalidProxyURL(t *testing.T) {
+	t.Parallel()
+	d := &GorillaDialer{
+		Dialer:   websocket.DefaultDialer,
+		ProxyURL: "://invalid-url",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, _, err := d.DialContext(ctx, "wss://example.com/ws", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid proxy URL")
+	}
+	if !strings.Contains(err.Error(), "parse proxy url") {
+		t.Fatalf("expected parse proxy url error, got: %v", err)
+	}
+}
+
+func TestGorillaDialerProxyURLApplied(t *testing.T) {
+	t.Parallel()
+	// Use a valid proxy URL that points to a non-listening address.
+	// The dial should fail with a connection error, not a parse error,
+	// proving the proxy was configured.
+	d := &GorillaDialer{
+		Dialer:   websocket.DefaultDialer,
+		ProxyURL: "http://127.0.0.1:1",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, _, err := d.DialContext(ctx, "wss://example.com/ws", nil)
+	if err == nil {
+		t.Fatal("expected connection error when proxy is unreachable")
+	}
+	if strings.Contains(err.Error(), "parse proxy url") {
+		t.Fatalf("valid proxy URL should not produce parse error, got: %v", err)
+	}
+	// The error should be about the proxy connection (refused / timeout),
+	// not about the URL parsing.
+}
+
+func TestWSConnectorPongUpdatesPingInterval(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newFakeWSConn()
+		c := quietConnector(t, conn, FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }), 10*time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		pushPong := func(payload string) {
+			f := NewPongFrame(7)
+			f.Payload = []byte(payload)
+			conn.Push(f.Marshal())
+			synctest.Wait()
+		}
+		checkPings := func(wait time.Duration, want int) {
+			time.Sleep(wait)
+			synctest.Wait()
+			if got := len(conn.snapshot()); got != want {
+				t.Errorf("pings after %s = %d, want %d", wait, got, want)
+			}
+		}
+		pushPong(`{"PingInterval":2}`)
+		checkPings(2*time.Second, 1)
+		for _, payload := range []string{"", `{`, `{}`, `null`, `{"PingInterval":0}`, `{"PingInterval":-1}`, `{"PingInterval":"2"}`, `{"PingInterval":9223372036854775807}`} {
+			pushPong(payload)
+		}
+		checkPings(time.Second, 1)
+		// Unchanged configuration must not postpone the next heartbeat.
+		pushPong(`{"PingInterval":2}`)
+		checkPings(time.Second, 2)
+		pushPong(`{"PingInterval":5}`)
+		checkPings(4*time.Second, 2)
+		checkPings(time.Second, 3)
+		for _, raw := range conn.snapshot() {
+			f, err := UnmarshalFrame(raw)
+			if err != nil || f.Method != FrameMethodControl || f.HeaderValue(FrameHeaderTypeKey) != FrameHeaderTypePing || f.Service != 7 {
+				t.Errorf("unexpected heartbeat: frame=%+v err=%v", f, err)
+			}
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run on cancel: %v", err)
+		}
+		checkPings(time.Minute, 3)
+	})
+}
+
+func TestWSConnectorPingFailureUnblocksRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newFakeWSConn()
+		conn.writeErr = errors.New("injected ping failure")
+		c := quietConnector(t, conn, FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }), time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Error("ping failure must return an error to Hub backoff")
+			}
+		default:
+			t.Error("Run stayed blocked after ping failure")
+			cancel()
+			<-done
+		}
+		select {
+		case <-conn.closed:
+		default:
+			t.Error("failed socket was not closed")
+		}
+		// The supervisor retries Connect after backoff; the same connector
+		// must start a fresh session without a surviving failed ping loop.
+		replacement := newFakeWSConn()
+		c.cfg.Dialer = &fakeWSDialer{conn: replacement}
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if got := len(replacement.snapshot()); got != 1 {
+			t.Errorf("replacement session pings = %d, want 1", got)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("replacement Run on cancel: %v", err)
+		}
+	})
+}
+
+func TestWSConnectorPongArmsUnarmedPingLoop(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		conn := newFakeWSConn()
+		// A non-positive fallback leaves the ticker unarmed; a later pong
+		// must still be accepted and start heartbeats.
+		c := quietConnector(t, conn, FrameDecoderFunc(func([]byte, Installation) (InboundMessage, bool, error) { return InboundMessage{}, false, nil }), -time.Second)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- c.Run(ctx, Installation{}, nil) }()
+		synctest.Wait()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if got := len(conn.snapshot()); got != 0 {
+			t.Fatalf("pings before update = %d, want 0", got)
+		}
+		f := NewPongFrame(7)
+		f.Payload = []byte(`{"PingInterval":2}`)
+		conn.Push(f.Marshal())
+		synctest.Wait()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if got := len(conn.snapshot()); got != 1 {
+			t.Errorf("pings after update = %d, want 1", got)
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run on cancel: %v", err)
+		}
+	})
+}
+
+func TestReadDeadlineForPingInterval(t *testing.T) {
+	t.Parallel()
+	const maxDuration = time.Duration(1<<63 - 1)
+	cases := []struct {
+		name       string
+		base, ping time.Duration
+		want       time.Duration
+	}{
+		{"default cadence keeps base", 6 * time.Minute, 2 * time.Minute, 6 * time.Minute},
+		{"short cadence keeps base", 6 * time.Minute, 2 * time.Second, 6 * time.Minute},
+		{"long cadence raises deadline", 6 * time.Minute, 5 * time.Minute, 15 * time.Minute},
+		{"non-positive cadence keeps base", 6 * time.Minute, -time.Second, 6 * time.Minute},
+		{"overflow saturates", 6 * time.Minute, maxDuration / 2, maxDuration},
+	}
+	for _, tc := range cases {
+		if got := readDeadlineFor(tc.base, tc.ping); got != tc.want {
+			t.Errorf("%s: readDeadlineFor(%s, %s) = %s, want %s", tc.name, tc.base, tc.ping, got, tc.want)
+		}
 	}
 }

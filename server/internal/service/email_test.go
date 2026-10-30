@@ -52,7 +52,7 @@ func TestNewEmailService_TLSMode(t *testing.T) {
 		{"explicit starttls on 465 overrides auto-detect", "starttls", "465", false},
 		{"case-insensitive", "IMPLICIT", "587", true},
 		{"trims whitespace", "  implicit  ", "587", true},
-		{"unknown value falls back to starttls", "tls", "465", false},
+		{"tls alias forces SMTPS", "tls", "465", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

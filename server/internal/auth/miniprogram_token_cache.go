@@ -12,10 +12,10 @@ import (
 const miniprogramTokenCachePrefix = "mul:auth:mp:"
 
 type MiniprogramTokenCache struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
-func NewMiniprogramTokenCache(rdb *redis.Client) *MiniprogramTokenCache {
+func NewMiniprogramTokenCache(rdb redis.UniversalClient) *MiniprogramTokenCache {
 	if rdb == nil {
 		return nil
 	}

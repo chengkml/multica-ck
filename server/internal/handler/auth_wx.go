@@ -115,7 +115,7 @@ func (h *Handler) WxBind(w http.ResponseWriter, r *http.Request) {
 				}
 				writeJSON(w, http.StatusOK, WxLoginResponse{
 					Token: tokenString,
-					User:  userToResponse(user),
+					User:  h.userToResponse(user),
 					Bound: true,
 				})
 				return
@@ -138,7 +138,7 @@ func (h *Handler) WxBind(w http.ResponseWriter, r *http.Request) {
 	slog.Info("wx_bind: wechat account bound", "user_id", uuidToString(user.ID), "email", email)
 	writeJSON(w, http.StatusOK, WxLoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 		Bound: true,
 	})
 }
@@ -181,7 +181,7 @@ func (h *Handler) WxLogin(w http.ResponseWriter, r *http.Request) {
 
 			writeJSON(w, http.StatusOK, WxLoginResponse{
 				Token: tokenString,
-				User:  userToResponse(user),
+				User:  h.userToResponse(user),
 				Bound: true,
 			})
 			return
@@ -225,7 +225,7 @@ func (h *Handler) WxLogin(w http.ResponseWriter, r *http.Request) {
 	slog.Info("wx_login: user logged in via wechat", "user_id", uuidToString(user.ID))
 	writeJSON(w, http.StatusOK, WxLoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 		Bound: true,
 	})
 }
